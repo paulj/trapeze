@@ -19,6 +19,8 @@ start_link() ->
 
 handle_request(Req) ->
     case catch gen_server:call(?MODULE, {handle_request, Req}) of
+        ok -> ok;
+        {ok, Handler} -> Handler();
         Resp ->  Resp
     end.
     
@@ -39,7 +41,7 @@ init([]) ->
     {ok, #state{channel = Ch, outstanding = ets:new(trapeze_outstanding, []),
                 next_id = 0, queue = Queue}}.
 
-handle_call({handle_request, Req}, _From, 
+handle_call({handle_request, Req}, {From, _FromTag}, 
             State = #state{channel = Ch, outstanding = Outstanding,
                            next_id = NextId, queue = ReplyQueue}) ->
     %% Transform the request into an appropriate body to send across the wire
@@ -57,7 +59,10 @@ handle_call({handle_request, Req}, _From,
             H -> H
         end),
     "/" ++ Path = Req:get(raw_path),
-    [Hostname, Port] = string:tokens(Host, ":"),
+    [Hostname, Port] = case string:str(Host, ":") of
+        0 -> [Host, "80"];
+        _ -> string:tokens(Host, ":")
+    end,
     RoutingKey = string:join([Method, Hostname, Port, "/"] ++ string:tokens(Path, "/"), "."),
     %% io:format("Using Routing Key: ~s~n", [RoutingKey]),
 
@@ -72,23 +77,26 @@ handle_call({handle_request, Req}, _From,
                              reply_to = ReplyQueue },
     Content = #amqp_msg{props = Properties, payload = list_to_binary(Body)},
     
+    NextState = State#state{next_id = NextId + 1},
+    
     case amqp_channel:call(Ch, BasicPublish, Content) of
         ok -> 
-            %% Store the request for later response
-            MessageHandler = spawn(
+            %% Create a handler for the calling thread to run to process the response. Don't 
+            %% spawn it, because if we did and then returned, mochiweb would terminate our
+            %% connection!
+            MessageHandler =
                 fun () -> 
                     manage_request(Req, 
                                    fun() -> 
                                        gen_server:cast(?MODULE, {completed_request, MessageId})
                                    end)
-                end),
-            ets:insert(Outstanding, {MessageId, MessageHandler}),
-            ok;
+                end,
+            ets:insert(Outstanding, {MessageId, From}),
+            {reply, {ok, MessageHandler}, NextState};
         Res -> 
-            error(Req, 500, [], "Failed to send message", io_lib:format("~p", [Res]))
-    end,
-                
-    {reply, ok, State#state{next_id = NextId + 1}};
+            error(Req, 500, [], "Failed to send message", io_lib:format("~p", [Res])),
+            {reply, ok, NextState}
+    end;
 handle_call(Req, _From, State) ->
     io:format("Request was ~p~n", [Req]),
     {reply, unknown_request, State}.
