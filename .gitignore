@@ -1,3 +1,5 @@
 ebin/*.beam
 tmp/
 build/
+dist/
+erl_crash.dump
