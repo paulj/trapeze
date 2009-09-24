@@ -47,10 +47,15 @@ handle_call({handle_request, Req}, _From,
     
     %% Build a routing key
     Method = string:to_lower(atom_to_list(Req:get(method))),
-    Host = case Req:get_header_value(host) of
-        undefined -> throw({error, 400, "Missing Host HTTP header"});
-        MixedCaseHost -> string:to_lower(MixedCaseHost)
-    end,
+    Host = string:to_lower(
+        case Req:get_header_value("X-Forwarded-Host") of
+            undefined -> 
+                case Req:get_header_value(host) of
+                    undefined -> throw({error, 400, "Missing Host HTTP header"});
+                    H -> H
+                end;
+            H -> H
+        end),
     "/" ++ Path = Req:get(raw_path),
     [Hostname, Port] = string:tokens(Host, ":"),
     RoutingKey = string:join([Method, Hostname, Port, "/"] ++ string:tokens(Path, "/"), "."),
