@@ -1,8 +1,93 @@
 = Trapeze - AMQP Web Routing
 Trapeze provides the ability to use your AMQP message queuing infrastructure as
-a web load balancer. This provides a number of abilities:
+a web router and load balancer. This provides a number of abilities:
  * Instant load-balancing
  * Dynamic routing changes
+
+== Installation
+Trapeze installs as a RabbitMQ plugin. Before setting up Trapeze, you'll need a working
+RabbitMQ development environment. Setting this up is described at
+http://www.rabbitmq.com/plugin-development.html#getting-started. Briefly, the process involves:
+ * hg clone http://hg.rabbitmq.com/rabbitmq-public-umbrella
+ * cd rabbitmq-public-umbrella
+ * make co
+ * make
+
+Once this environment is functional, checkout Trapeze into the umbrella. Assuming that your
+current working directory is rabbitmq-public-umbrella:
+ * git clone git://github.com/paulj/trapeze.git
+ * cd trapeze
+ * make
+
+Trapeze can now be run in place by executing:
+  make run
+
+== Trying it out
+Assuming that you have a default configuration for RabbitMQ's Mochiweb support (eg, you
+just checked it out as part of the above steps), Trapeze will be listening on
+http://localhost:55672. Visiting this URL should result in a 404, since Trapeze currently
+doesn't have anything to route to!
+
+To make Trapeze route to an application, you'll need to create a basic application, and run
+it with a Trapeze-aware handler that understands how to tell Trapeze to route requests to it.
+Currently, the only handler that can do this is http://github.com/paulj/trapeze-rb, which
+provides a Ruby Rack handler for making Rack-aware Ruby applications participate in Trapeze
+routing. An example of using this would be:
+ * git clone git://github.com/paulj/trapeze-rb.git
+ * cd trapeze-rb
+ * rake build
+ * sudo gem install pkg/trapeze-0.1.0.gem
+ * cd samples
+ * trapezerb -R config.ru start
+
+Following these steps should result in seeing everybody's favourite phrase - "Hello World".
+At this point, Trapeze would appear to be making something fairly simple (making the webapp
+browseable) much harder than it needs to be. To show off the actual purpose of Trapeze, you'll
+need to run more than one application. For your first application, stop the current trapezerb
+instance, and instead run it as:
+  trapezerb -R config.ru -k "*.localhost.*./.#" -n app1 start
+
+In a second terminal, change to the trapeze-rb/samples directory again, and execute:
+  trapezerb -R config2.ru -k "*.127.0.0.1.*./.#" -n app2 start
+
+In your web browser, if you visit http://localhost:55672, then you should see "Hello World". If
+you visit http://127.0.0.1:55672, you should see "Hello Different World". Trapeze is routing to
+two different applications, based upon the keys (-k) they provide when they connect. For more
+details on how to express these keys, see the "Routing Keys" section of this document.
+
+Note also that each invocation includes a "-n" parameter. This parameter indicates an application
+name. If two consumers indicate the same application name, then Trapeze will round-robin requests
+to them. This allows you to bring up multiple instances of your application (potentially on
+multiple machines), and have the requests balanced between them. To see this in action, try starting
+both config.ru and config2.ru with no routing key (ie, accept anything), and the same app name:
+ trapezerb -R config.ru -n app1 start
+   (And in another terminal)
+ trapezerb -R config.ru -n app2 start
+
+Requests should alternate between "Hello World" and "Hello Different World" over a series of 
+refreshes.
+
+== Routing Keys
+Trapeze utilises AMQP routing keys in order to find the appropriate application to route a request to.
+Each requests verb/host/port/path combination is transformed into a routing key that looks like:
+  <verb>.<host parts>.<port>./.<path parts>
+
+For example, a request to http://localhost:55672 would be transformed into:
+  get.localhost.55672./
+
+A request to http://127.0.0.1:55672/some/path/file.html would be transformed into:
+  get.127.0.0.1.55672./.some.path.file.html
+
+Note that the domain and path portions are split by periods. This allows standard AMQP topic-routing to be
+applied. AMQP topic routing provides a facility to subscribe to topics using routing keys that follow a syntax
+allowing for sections to be either marked as wildcards or requiring a specific value. The syntax is:
+ * A * indicates that any value is acceptable for this element of the key
+ * A # indicates that any number of period separated values can be accepted
+ * A textual value indicates that an exact match is required
+
+Examples of matching might be:
+ * To subscribe to anything sent to http://localhost:55672, use "*.localhost.55672./.#". The verb is considered a wildcard, and any number of path parameters are considered acceptable;
+ * To subscribe to example.com and any sub-domain, use "*.#.example.com.*./.#". The verb is considered a wildcard, and any number (including 0) domain parts can precede example.com. Any number of path parameters are acceptable.
 
 == Software License
   Copyright (c) 2009 Paul Jones <paulj@lshift.net>
